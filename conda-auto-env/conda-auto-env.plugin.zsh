@@ -27,8 +27,8 @@ function conda_auto_env() {
   fi
 }
 
-function cd() {
-  builtin cd "$@"
+function chpwd() {
+  # hook into directory change
   conda_auto_env
 }
 
