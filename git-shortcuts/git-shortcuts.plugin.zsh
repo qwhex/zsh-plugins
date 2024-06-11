@@ -1,7 +1,14 @@
 # git-shortcuts
 # various git shortcuts / macros
 
-function git-switch() {
+function check_uncommitted_changes() {
+    if ! git diff-index --quiet HEAD --; then
+        echo "Error: You have uncommitted changes. Please commit or stash them."
+        return 1
+    fi
+}
+
+function git-switch-branch() {
     # saves local changes and switches to branch
     local branch_name="$1"
     git add -A
@@ -11,25 +18,34 @@ function git-switch() {
 }
 
 function git-rebase-to-master() {
+    set -e
+
     # Check for uncommitted changes
-    if ! git diff-index --quiet HEAD --; then
-        echo "Error: You have uncommitted changes. Please commit or stash them."
-        return 1
-    fi
+    check_uncommitted_changes
 
     # Fetch the latest changes from the remote repository
     echo "Fetching latest updates from origin..."
-    if ! git fetch origin master; then
-        echo "Failed to fetch updates from origin."
-        return 1
-    fi
+    git fetch origin master
     
     # Rebase the current branch on top of the fetched master branch
     echo "Rebasing current branch onto master..."
-    if ! git rebase origin/master; then
-        echo "Rebase failed. Please resolve any conflicts manually."
-        return 1
-    fi
+    git rebase origin/master
     
     echo "Rebase successful!"
+}
+
+function git-push-new-branch() {
+    set -e
+
+    # Get the current branch name
+    local branch_name="$(git branch --show-current)"
+
+    # Check for uncommitted changes
+    check_uncommitted_changes
+
+    # Push the current branch to the remote and set upstream tracking
+    echo "Pushing new branch '$branch_name' to remote..."
+    git push -u origin "$branch_name"
+
+    echo "Push successful and upstream tracking set!"
 }
