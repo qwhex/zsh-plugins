@@ -10,8 +10,22 @@ function check_uncommitted_changes() {
 }
 
 function git-switch-branch() {
-    # saves local changes and switches to branch
+    # Intentionally forces a WIP commit and skips hooks to quickly save state
+    # and switch branches. Use with caution as it bypasses normal commit checks.
+    if [ $# -eq 0 ]; then
+        echo "Usage: git-switch-branch <branch_name>"
+        return 1
+    fi
+
     local branch_name="$1"
+
+    # Check if the branch exists locally or remotely
+    if ! git show-ref --verify --quiet refs/heads/"$branch_name" && \
+       ! git show-ref --verify --quiet refs/remotes/origin/"$branch_name"; then
+        echo "Error: Branch $branch_name does not exist locally or remotely"
+        return 1
+    fi
+
     git add -A
     git commit -m "WIP" --no-verify
     if ! git pull origin "$branch_name"; then
@@ -26,23 +40,76 @@ function git-switch-branch() {
 }
 
 function git-rebase-to-master() {
+    local main_branch="master"
+    # Try to detect if the repository uses 'main' instead of 'master'
+    if git show-ref --verify --quiet refs/remotes/origin/main; then
+        main_branch="main"
+    fi
+
     # Check for uncommitted changes
-    if ! check_uncommitted_changes; then
-        return 1
+    if ! git diff-index --quiet HEAD --; then
+        echo "You have uncommitted changes. What would you like to do?"
+        echo "1) Stash changes, rebase, and reapply stash"
+        echo "2) Abort rebase"
+        read -r "choice?Enter your choice (1 or 2): "
+        
+        case $choice in
+            1)
+                echo "Stashing changes..."
+                if ! git stash push -m "Automated stash before rebase to $main_branch"; then
+                    echo "Error: Failed to stash changes"
+                    return 1
+                fi
+                
+                # Track if we stashed anything
+                local stash_created=true
+                ;;
+            2)
+                echo "Rebase aborted"
+                return 0
+                ;;
+            *)
+                echo "Invalid choice. Rebase aborted"
+                return 1
+                ;;
+        esac
     fi
 
     # Fetch the latest changes from the remote repository
     echo "Fetching latest updates from origin..."
-    if ! git fetch origin master; then
-        echo "Error: Failed to fetch from origin/master"
+    if ! git fetch origin "$main_branch"; then
+        # If we stashed changes, pop them back before returning
+        if [ "$stash_created" = true ]; then
+            echo "Reapplying stashed changes..."
+            git stash pop
+        fi
+        echo "Error: Failed to fetch from origin/$main_branch"
         return 1
     fi
     
-    # Rebase the current branch on top of the fetched master branch
-    echo "Rebasing current branch onto master..."
-    if ! git rebase origin/master; then
-        echo "Error: Rebase failed. Please resolve conflicts and run 'git rebase --continue'"
+    # Rebase the current branch on top of the fetched master/main branch
+    echo "Rebasing current branch onto $main_branch..."
+    if ! git rebase "origin/$main_branch"; then
+        if [ "$stash_created" = true ]; then
+            echo "Rebase conflicts detected and you have stashed changes."
+            echo "Please resolve the conflicts and run 'git rebase --continue'"
+            echo "After the rebase is complete, run 'git stash pop' to reapply your changes"
+            echo "Your changes are safely stored in the stash."
+        else
+            echo "Rebase failed. Please resolve conflicts and run 'git rebase --continue'"
+        fi
         return 1
+    fi
+    
+    # If we stashed changes, reapply them
+    if [ "$stash_created" = true ]; then
+        echo "Reapplying stashed changes..."
+        if ! git stash pop; then
+            echo "Error: Conflicts while reapplying stashed changes."
+            echo "Your changes are still in the stash."
+            echo "Resolve conflicts manually and then run 'git stash pop'"
+            return 1
+        fi
     fi
     
     echo "Rebase successful!"
@@ -51,6 +118,10 @@ function git-rebase-to-master() {
 function git-push-new-branch() {
     # Get the current branch name
     local branch_name="$(git branch --show-current)"
+    if [ -z "$branch_name" ]; then
+        echo "Error: Not currently on any branch"
+        return 1
+    fi
 
     # Check for uncommitted changes
     if ! check_uncommitted_changes; then
@@ -81,6 +152,12 @@ function git-checkout-upstream() {
         return 1
     fi
 
+    # Check if branch already exists locally
+    if git show-ref --verify --quiet refs/heads/"$branch_name"; then
+        echo "Error: Branch '$branch_name' already exists locally"
+        return 1
+    fi
+
     # Fetch only the specified branch from the remote
     echo "Fetching branch '$branch_name' from $remote_name..."
     if ! git fetch "$remote_name" "$branch_name"; then
@@ -99,6 +176,19 @@ function git-checkout-upstream() {
         echo "Branch '$branch_name' checked out successfully!"
     else
         echo "Error: Branch '$branch_name' does not exist on remote '$remote_name'"
+        return 1
+    fi
+}
+
+function git-change-commit-msg() {
+    # Amends the last commit message
+    if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+        echo "Error: No commits exist yet"
+        return 1
+    fi
+    
+    if ! git commit --amend; then
+        echo "Error: Failed to amend commit message"
         return 1
     fi
 }
