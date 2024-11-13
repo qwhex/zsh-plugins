@@ -41,6 +41,14 @@ function git-switch-branch() {
 
 function git-rebase-to-master() {
     local main_branch="master"
+    local stash_created=false  # Initialize at start
+    local force_mode=false
+
+    # Handle --force flag
+    if [[ "$1" == "--force" ]]; then
+        force_mode=true
+    fi
+
     # Try to detect if the repository uses 'main' instead of 'master'
     if git show-ref --verify --quiet refs/remotes/origin/main; then
         main_branch="main"
@@ -48,31 +56,38 @@ function git-rebase-to-master() {
 
     # Check for uncommitted changes
     if ! git diff-index --quiet HEAD --; then
-        echo "You have uncommitted changes. What would you like to do?"
-        echo "1) Stash changes, rebase, and reapply stash"
-        echo "2) Abort rebase"
-        read -r "choice?Enter your choice (1 or 2): "
-        
-        case $choice in
-            1)
-                echo "Stashing changes..."
-                if ! git stash push -m "Automated stash before rebase to $main_branch"; then
-                    echo "Error: Failed to stash changes"
-                    return 1
-                fi
-                
-                # Track if we stashed anything
-                local stash_created=true
-                ;;
-            2)
-                echo "Rebase aborted"
-                return 0
-                ;;
-            *)
-                echo "Invalid choice. Rebase aborted"
+        if [[ "$force_mode" == true ]]; then
+            echo "Force mode: Automatically stashing changes..."
+            if ! git stash push -m "Automated stash before rebase to $main_branch"; then
+                echo "Error: Failed to stash changes"
                 return 1
-                ;;
-        esac
+            fi
+            stash_created=true
+        else
+            echo "You have uncommitted changes. What would you like to do?"
+            echo "1) Stash changes, rebase, and reapply stash"
+            echo "2) Abort rebase"
+            read -r "choice?Enter your choice (1 or 2): "
+            
+            case $choice in
+                1)
+                    echo "Stashing changes..."
+                    if ! git stash push -m "Automated stash before rebase to $main_branch"; then
+                        echo "Error: Failed to stash changes"
+                        return 1
+                    fi
+                    stash_created=true
+                    ;;
+                2)
+                    echo "Rebase aborted"
+                    return 0
+                    ;;
+                *)
+                    echo "Invalid choice. Rebase aborted"
+                    return 1
+                    ;;
+            esac
+        fi
     fi
 
     # Fetch the latest changes from the remote repository
@@ -191,4 +206,30 @@ function git-change-commit-msg() {
         echo "Error: Failed to amend commit message"
         return 1
     fi
+}
+
+function git-cleanup() {
+    local main_branch="master"
+    
+    # Check which main branch exists (master or main)
+    if git show-ref --verify --quiet refs/remotes/origin/main; then
+        main_branch="main"
+    fi
+    
+    echo "Starting cleanup process..."
+    
+    # Prune remote-tracking branches
+    echo "Pruning remote branches..."
+    git remote prune origin
+    
+    # Remove already merged local branches
+    echo "Removing merged local branches..."
+    # The grep pattern now handles both main and master
+    git branch --merged "$main_branch" | grep -v "^\*\|master\|main" | xargs -r git branch -d
+    
+    # Optimize repository
+    echo "Running garbage collection..."
+    git gc
+    
+    echo "Cleanup complete!"
 }
